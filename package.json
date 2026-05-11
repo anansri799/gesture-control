@@ -1,0 +1,43 @@
+{
+  "name": "gesture-control",
+  "version": "1.0.0",
+  "description": "Jarvis-style touchless gesture control. Zero data saved.",
+  "main": "main.js",
+  "scripts": {
+    "start":       "electron .",
+    "build:mac":   "electron-builder --mac",
+    "build:win":   "electron-builder --win",
+    "build:linux": "electron-builder --linux"
+  },
+  "dependencies": {
+    "@mediapipe/hands":        "0.4.1675469240",
+    "@mediapipe/camera_utils": "0.3.1675466862",
+    "@nut-tree-fork/nut-js":   "4.2.0"
+  },
+  "devDependencies": {
+    "electron":         "29.4.6",
+    "electron-builder": "24.13.3"
+  },
+  "build": {
+    "appId":       "com.gesturecontrol.app",
+    "productName": "GestureControl",
+    "asar": true,
+    "files": [
+      "main.js",
+      "overlay.html",
+      "src/**/*",
+      "assets/**/*",
+      "node_modules/@mediapipe/**/*",
+      "node_modules/@nut-tree-fork/**/*"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities",
+      "extendInfo": {
+        "NSCameraUsageDescription": "GestureControl uses your camera to detect hand gestures. No video is ever saved or transmitted."
+      }
+    },
+    "win":   { "target": "nsis" },
+    "linux": { "target": "AppImage" }
+  }
+}

@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    /* Full screen, totally transparent, no scrollbars */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+    }
+
+    /* Hidden video element — camera feed goes here but is never shown */
+    #video {
+      display: none;
+    }
+
+    /* Canvas covers the whole screen — hand skeleton drawn here */
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* Gesture label — shows current detected gesture in corner */
+    #gesture-label {
+      position: absolute;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(0, 200, 255, 0.85);
+      font-family: 'Courier New', monospace;
+      font-size: 18px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    #gesture-label.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
+  <div id="gesture-label"></div>
+
+  <!-- MediaPipe Hands — loads from node_modules, never from internet -->
+  <script src="node_modules/@mediapipe/hands/hands.js"></script>
+<script src="node_modules/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+  const video  = document.getElementById('video')
+  const canvas = document.getElementById('canvas')
+  const ctx    = canvas.getContext('2d')
+  const label  = document.getElementById('gesture-label')
+
+  canvas.width  = window.innerWidth
+  canvas.height = window.innerHeight
+
+  let labelTimeout = null
+
+  // ── Smoothing ──────────────────────────────────────────
+  const SMOOTH_FRAMES  = 5
+  const posBufferLeft  = []
+  const posBufferRight = []
+
+  function smoothPosition(buffer, normPos) {
+    buffer.push({
+      x: (1 - normPos.x) * window.innerWidth,
+      y: normPos.y * window.innerHeight
+    })
+    if (buffer.length > SMOOTH_FRAMES) buffer.shift()
+    const avg = buffer.reduce((a, p) => ({ x: a.x + p.x, y: a.y + p.y }), { x: 0, y: 0 })
+    return {
+      x: Math.round(avg.x / buffer.length),
+      y: Math.round(avg.y / buffer.length)
+    }
+  }
+
+  // ── Drawing ────────────────────────────────────────────
+  const CONNECTIONS = [
+    [0,1],[1,2],[2,3],[3,4],
+    [0,5],[5,6],[6,7],[7,8],
+    [0,9],[9,10],[10,11],[11,12],
+    [0,13],[13,14],[14,15],[15,16],
+    [0,17],[17,18],[18,19],[19,20],
+    [5,9],[9,13],[13,17]
+  ]
+
+  function drawSkeleton(landmarks, color) {
+    if (!landmarks) return
+    const toScreen = (lm) => ({
+      x: (1 - lm.x) * canvas.width,
+      y: lm.y * canvas.height
+    })
+    ctx.strokeStyle = color
+    ctx.lineWidth   = 2
+    for (const [a, b] of CONNECTIONS) {
+      const pa = toScreen(landmarks[a])
+      const pb = toScreen(landmarks[b])
+      ctx.beginPath()
+      ctx.moveTo(pa.x, pa.y)
+      ctx.lineTo(pb.x, pb.y)
+      ctx.stroke()
+    }
+    for (const lm of landmarks) {
+      const p = toScreen(lm)
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2)
+      ctx.fillStyle = color
+      ctx.fill()
+    }
+  }
+
+  function showLabel(name) {
+    label.textContent = name.replace(/_/g, ' ')
+    label.classList.add('visible')
+    clearTimeout(labelTimeout)
+    labelTimeout = setTimeout(() => label.classList.remove('visible'), 800)
+  }
+
+  // ── Gesture reading ────────────────────────────────────
+  const STATE_CONFIRM_FRAMES = 3
+
+  function fingersExtended(lm) {
+    const extended = (tip, mcp) => tip.y < mcp.y - 0.02
+    return {
+      index:  extended(lm[8],  lm[5]),
+      middle: extended(lm[12], lm[9]),
+      ring:   extended(lm[16], lm[13]),
+      pinky:  extended(lm[20], lm[17]),
+    }
+  }
+
+  function isPinching(lm) {
+    return Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) < 0.05
+  }
+
+  function countExtended(f) {
+    return [f.index, f.middle, f.ring, f.pinky].filter(Boolean).length
+  }
+
+  // ── Left hand state ────────────────────────────────────
+  // Left hand: point to move cursor, pinch to click/drag
+  let leftState       = 'idle'   // idle | pointing | pinching
+  let leftPinchStart  = null
+  let leftPinchPos    = null
+  let leftFrameCount  = 0
+  let leftLastGesture = null
+
+  function processLeftHand(lm) {
+    const f      = fingersExtended(lm)
+    const pinch  = isPinching(lm)
+    const count  = countExtended(f)
+    const pos    = smoothPosition(posBufferLeft, lm[8])
+
+    // Detect raw gesture this frame
+    let raw = 'idle'
+    if (pinch)          raw = 'pinching'
+    else if (count === 1 && f.index) raw = 'pointing'
+
+    // Confirm gesture over N frames
+    if (raw === leftLastGesture) {
+      leftFrameCount++
+    } else {
+      leftLastGesture = raw
+      leftFrameCount  = 0
+      return
+    }
+    if (leftFrameCount < STATE_CONFIRM_FRAMES) return
+
+    const now = Date.now()
+
+    switch (leftState) {
+      case 'idle':
+      case 'pointing': {
+        if (raw === 'pointing') {
+          leftState = 'pointing'
+          window.gestureAPI.sendGesture({ gesture: 'point_move', position: pos })
+        }
+        if (raw === 'pinching') {
+          leftState      = 'pinching'
+          leftPinchStart = now
+          leftPinchPos   = pos
+        }
+        if (raw === 'idle') leftState = 'idle'
+        break
+      }
+
+      case 'pinching': {
+        if (raw !== 'pinching') {
+          // Released — short pinch = click, long pinch = nothing (was drag)
+          if (now - leftPinchStart < 400) {
+            window.gestureAPI.sendGesture({ gesture: 'pinch_click', position: pos })
+            showLabel('click')
+          }
+          leftState = 'idle'
+        } else {
+          // Still pinching — if moving it's a drag
+          const dx = pos.x - leftPinchPos.x
+          const dy = pos.y - leftPinchPos.y
+          const moved = Math.hypot(dx, dy)
+          if (moved > 8) {
+            window.gestureAPI.sendGesture({ gesture: 'pinch_drag', position: pos })
+            leftPinchPos = pos
+          }
+        }
+        break
+      }
+    }
+  }
+
+  // ── Right hand state ───────────────────────────────────
+  // Right hand: two fingers = right click or scroll
+  //             four fingers = desktop/mission control swipes
+  let rightState        = 'idle'
+  let rightLastGesture  = null
+  let rightFrameCount   = 0
+  let rightLastPos      = null
+  let rightLastTime     = null
+  let isScrolling       = false
+  let rightClickFired   = false
+
+  function processRightHand(lm) {
+    const f     = fingersExtended(lm)
+    const count = countExtended(f)
+    const pos   = smoothPosition(posBufferRight, lm[8])
+    const now   = Date.now()
+
+    // Raw gesture this frame
+    let raw = 'idle'
+    if      (count >= 4)                        raw = 'four_fingers'
+    else if (count === 2 && f.index && f.middle) raw = 'two_fingers'
+    else if (count === 1 && f.index)             raw = 'pointing'
+
+    // Confirm over N frames
+    if (raw === rightLastGesture) {
+      rightFrameCount++
+    } else {
+      rightLastGesture = raw
+      rightFrameCount  = 0
+      rightLastPos     = pos
+      rightLastTime    = now
+      isScrolling      = false
+      rightClickFired  = false
+      return
+    }
+    if (rightFrameCount < STATE_CONFIRM_FRAMES) return
+
+    // ── Two fingers: right click OR scroll ──────────────
+    if (raw === 'two_fingers') {
+      const dt = rightLastTime ? (now - rightLastTime) / 1000 : 0
+      const dx = rightLastPos ? pos.x - rightLastPos.x : 0
+      const dy = rightLastPos ? pos.y - rightLastPos.y : 0
+      const velocity = Math.hypot(dx, dy) / (dt || 0.016)
+
+      // If moving → scroll continuously
+      if (velocity > 80) {
+        isScrolling     = true
+        rightClickFired = false
+
+        const scrollAmount = Math.max(1, Math.round(velocity / 80))
+
+        if (Math.abs(dy) >= Math.abs(dx)) {
+          // Vertical scroll
+          const dir = dy > 0 ? 'scroll_down' : 'scroll_up'
+          window.gestureAPI.sendGesture({ gesture: dir, amount: scrollAmount })
+        } else {
+          // Horizontal scroll
+          const dir = dx > 0 ? 'scroll_right' : 'scroll_left'
+          window.gestureAPI.sendGesture({ gesture: dir, amount: scrollAmount })
+        }
+      } else if (!isScrolling && !rightClickFired && rightFrameCount === STATE_CONFIRM_FRAMES) {
+        // Stationary two fingers = right click (fires once)
+        window.gestureAPI.sendGesture({ gesture: 'right_click', position: pos })
+        showLabel('right click')
+        rightClickFired = true
+      }
+
+      rightLastPos  = pos
+      rightLastTime = now
+    }
+
+    // ── Four fingers: swipes ─────────────────────────────
+    if (raw === 'four_fingers') {
+      if (!rightLastPos || !rightLastTime) {
+        rightLastPos  = pos
+        rightLastTime = now
+        return
+      }
+
+      const dt = (now - rightLastTime) / 1000
+      const dx = pos.x - rightLastPos.x
+      const dy = pos.y - rightLastPos.y
+      const velocity = Math.hypot(dx, dy) / (dt || 0.016)
+
+      if (velocity > 200) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          const dir = dx > 0 ? 'swipe_right' : 'swipe_left'
+          window.gestureAPI.sendGesture({ gesture: dir })
+          showLabel(dir.replace('_', ' '))
+        } else {
+          const dir = dy > 0 ? 'swipe_down' : 'swipe_up'
+          window.gestureAPI.sendGesture({ gesture: dir })
+          showLabel(dir.replace('_', ' '))
+        }
+        rightLastPos  = pos
+        rightLastTime = now
+      }
+
+      rightLastPos  = pos
+      rightLastTime = now
+    }
+
+    // ── One finger: move cursor (either hand) ────────────
+    if (raw === 'pointing') {
+      window.gestureAPI.sendGesture({ gesture: 'point_move', position: pos })
+    }
+  }
+
+  // ── MediaPipe setup ────────────────────────────────────
+  const hands = new Hands({
+    locateFile: (file) => `node_modules/@mediapipe/hands/${file}`
+  })
+
+  hands.setOptions({
+    maxNumHands:            2,   // track both hands simultaneously
+    modelComplexity:        0,
+    minDetectionConfidence: 0.75,
+    minTrackingConfidence:  0.75,
+  })
+
+  hands.onResults((results) => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    if (!results.multiHandLandmarks?.length) return
+
+    results.multiHandLandmarks.forEach((landmarks, i) => {
+      // MediaPipe labels hands from its own perspective (mirrored)
+      // so "Right" from MediaPipe = user's left hand and vice versa
+      const handLabel = results.multiHandedness[i].label
+      const isLeft    = handLabel === 'Right'  // mirrored camera
+
+      drawSkeleton(landmarks, isLeft ? 'rgba(0,200,255,0.7)' : 'rgba(255,150,0,0.7)')
+
+      if (isLeft)  processLeftHand(landmarks)
+      else         processRightHand(landmarks)
+    })
+  })
+
+  const camera = new Camera(video, {
+    onFrame: async () => await hands.send({ image: video }),
+    width:  640,
+    height: 480,
+  })
+
+  camera.start()
+
+  window.gestureAPI.onStop(() => camera.stop())
+</script>
+
+</body>
+</html>
