@@ -1,6 +1,6 @@
 # GestureControl
 
-Touchless computer control for people with ALS and motor disabilities. Uses your built-in webcam to track hand gestures in real time and translate them into system input events — cursor movement, clicks, scrolls, and desktop navigation. No additional hardware. No data stored.
+Touchless computer control for people with ALS and motor disabilities. Uses your built-in webcam to track hand gestures in real time and translate them into system input events, including cursor movement, clicks, scrolls, and desktop navigation. No additional hardware while storing no data.
 
 > **Status:** Active development. Core gesture pipeline works. Intentionality thresholds and tremor filtering are being actively tuned. Not yet ready for patient use.
 
@@ -12,11 +12,11 @@ Touchless computer control for people with ALS and motor disabilities. Uses your
 Webcam frame → MediaPipe (21 landmarks) → Kalman filter → Gesture interpreter → OS input injection
 ```
 
-Every frame is processed in memory and immediately discarded. The app behaves like a keyboard — it fires input events and stores nothing. No database, no logs, no network calls during operation.
+Every frame is processed in memory and immediately discarded. The app behaves like a keyboard, and it fires input events and stores nothing. No database, no logs, no network calls during operation.
 
 ### The Tremor Problem
 
-ALS and Parkinson's cause involuntary hand tremors oscillating at **4–12 Hz**. Intentional movement happens at **0–3 Hz**. A naive smoothing filter (EMA) can't distinguish these — it smooths everything, including fast intentional gestures.
+ALS and Parkinson's cause involuntary hand tremors oscillating at **4–12 Hz**. Intentional movement happens at **0–3 Hz**. A naive smoothing filter (EMA) can't distinguish these, as it smooths everything, including fast intentional gestures.
 
 GestureControl implements a **2D Kalman filter** from scratch, treating cursor tracking as a state estimation problem. The filter maintains a state vector `[position, velocity]` for each axis and runs two steps per frame:
 
@@ -46,7 +46,7 @@ Update:   K = P / (P + R)  (Kalman gain — how much to trust the measurement)
 | Right | Four fingers swipe up | Mission Control |
 | Right | Four fingers swipe down | App Exposé |
 
-**Handedness note:** MediaPipe labels hands from its own perspective (mirrored). The app corrects for this — `handedness === 'Right'` from MediaPipe maps to the user's left hand.
+**Handedness note:** MediaPipe labels hands from its own perspective (mirrored). The app corrects for this by labeling `handedness === 'Right'` from MediaPipe maps to the user's left hand.
 
 ---
 
@@ -72,7 +72,7 @@ gesture-app/
 
 **Why MediaPipe in the renderer?** MediaPipe Hands uses WebAssembly + WebGL for GPU-accelerated inference. Running it in the Electron renderer gives access to `getUserMedia` and the GPU without needing native bindings.
 
-**Why IPC for gestures?** The renderer detects gestures but can't inject OS input (sandboxed). The main process can inject input but can't access the camera. `ipcRenderer.send` bridges them — gesture events are small serializable objects, latency is negligible.
+**Why IPC for gestures?** The renderer detects gestures but can't inject OS input (sandboxed). The main process can inject input but can't access the camera. `ipcRenderer.send` bridges them, as gesture events are small serializable objects,so latency is negligible.
 
 **Why no data persistence?** Deliberate. The app is designed for vulnerable users who should not have to trust a third party with their behavioral data. No `electron-store`, no SQLite, no log files. Settings reset on restart (persistence coming via encrypted local config, opt-in).
 
@@ -126,7 +126,7 @@ Total (no buffer):  ~48ms
 Total (3 frames):   ~147ms
 ```
 
-Confirmation frames are the dominant latency cost. Cursor movement (`point_move`) bypasses confirmation — it fires every frame for smooth tracking.
+Confirmation frames are the dominant latency cost. Cursor movement (`point_move`) bypasses confirmation and fires every frame for smooth tracking.
 
 ---
 
@@ -160,7 +160,7 @@ Confirmation frames are the dominant latency cost. Cursor movement (`point_move`
 
 This project is being built for real patients. If you're an occupational therapist, assistive technology specialist, or ALS patient willing to give feedback, that is more valuable than code right now.
 
-For code contributions — open an issue first. The gesture thresholds and Kalman tuning are the most impactful areas.
+For code contributions, open an issue first. The gesture thresholds and Kalman tuning are the most impactful areas.
 
 ---
 
